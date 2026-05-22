@@ -44,8 +44,8 @@ services:
       KC_DB_USERNAME: ${KC_DB_USER:-keycloak}
       KC_DB_PASSWORD: ${KC_DB_PASSWORD:?set in .env}
       KC_HOSTNAME: ${KC_HOSTNAME:?set in .env}
-      KC_HOSTNAME_STRICT: "true"
-      KC_HOSTNAME_STRICT_HTTPS: "true"
+      KC_HOSTNAME_STRICT: ${KC_HOSTNAME_STRICT:-false}
+      KC_HOSTNAME_STRICT_HTTPS: ${KC_HOSTNAME_STRICT_HTTPS:-false}
       KC_PROXY_HEADERS: xforwarded
       KC_HTTP_ENABLED: "true"
       KC_HEALTH_ENABLED: "true"
@@ -57,8 +57,8 @@ services:
       KEYCLOAK_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD:?set in .env}
       JAVA_OPTS_APPEND: "-Xms512m -Xmx2g -XX:MaxMetaspaceSize=256m"
     ports:
-      # 8080 (HTTP app) : interne au reseau edge -> Nginx ; pas bind sur LAN
-      - "${LAN_IP:?set in .env}:9000:9000"   # /metrics + /health pour Prometheus
+      - "${LAN_IP:?set in .env}:8080:8080"   # BOOTSTRAP ONLY — retirer en prod (README §9)
+      - "${LAN_IP}:9000:9000"                # /metrics + /health pour Prometheus
     volumes:
       - /home/eadminsc/keycloak/import:/opt/keycloak/data/import:ro
       - /home/eadminsc/keycloak/export:/opt/keycloak/data/export

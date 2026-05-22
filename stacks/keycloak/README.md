@@ -1,9 +1,11 @@
 # Stack Keycloak 26 — host `10.61.21.143` (co-localisé avec Nginx)
 
-Keycloak Quarkus + PostgreSQL 16 + `pg-exporter`. **Le port HTTP 8080 n'est pas
-publié sur le LAN** : Nginx (même hôte) y accède via le réseau Docker `edge`,
-donc **zéro hop LAN** entre l'edge et Keycloak. Seul `:9000` (metrics + health)
-est exposé sur le LAN pour Prometheus.
+Keycloak Quarkus + PostgreSQL 16 + `pg-exporter`.
+
+Par défaut la stack est en **mode bootstrap** (DNS pas prêt) : `:8080` est bindé
+sur le LAN et `KC_HOSTNAME_STRICT=false` pour accéder via
+`http://10.61.21.143:8080/admin`. **Retirer ces réglages avant la mise en prod**
+(cf. §9).
 
 ## 1. Pré-requis hôte
 
@@ -32,6 +34,8 @@ KC_DB_NAME=keycloak
 KC_DB_USER=keycloak
 KC_DB_PASSWORD=<strong>
 KC_HOSTNAME=sso.example.com
+KC_HOSTNAME_STRICT=false
+KC_HOSTNAME_STRICT_HTTPS=false
 KC_BOOTSTRAP_ADMIN=admin
 KC_BOOTSTRAP_ADMIN_PASSWORD=<strong>
 PG_EXPORTER_USER=monitoring
@@ -88,23 +92,39 @@ cp -a /old/path/providers/*.jar /home/eadminsc/keycloak/providers/
 docker restart keycloak
 ```
 
-## 5. Ports
+## 5. Vérifier l'installation (bootstrap)
 
-| Port | Service | Visibilité |
-|---|---|---|
-| 8080 | Keycloak HTTP | **Docker network `edge` uniquement** (Nginx local) |
-| 9000 | `/metrics`, `/health/*` | LAN (`10.61.21.0/24`) pour Prometheus |
-| 9187 | pg-exporter | LAN |
+```bash
+# containers
+docker ps --filter name=keycloak --format "table {{.Names}}\t{{.Status}}"
+
+# health (LAN)
+curl -s http://10.61.21.143:9000/health/ready | jq -r .status   # UP
+
+# console admin directe (bootstrap, sans DNS)
+curl -s -o /dev/null -w "%{http_code}\n" http://10.61.21.143:8080/admin/
+# attendu : 200 ou 302 → navigateur : http://10.61.21.143:8080/admin
+```
+
+Login : `KC_BOOTSTRAP_ADMIN` / `KC_BOOTSTRAP_ADMIN_PASSWORD`.
+
+## 6. Ports
+
+| Port | Service | Visibilité (bootstrap) | Visibilité (prod §9) |
+|---|---|---|---|
+| 8080 | Keycloak HTTP | LAN (`10.61.21.143`) | **retiré** — Nginx via réseau `edge` |
+| 9000 | `/metrics`, `/health/*` | LAN | LAN |
+| 9187 | pg-exporter | LAN | LAN |
 
 > La DB Postgres (5432) **n'est jamais exposée**.
 
-## 6. Reverse-proxy
+## 7. Reverse-proxy
 
 `stacks/nginx/etc/sites-enabled/keycloak.conf` proxy `https://sso.example.com`
 → `http://keycloak:8080` (résolution Docker DNS interne, 0 hop LAN).
 Headers `X-Forwarded-*` + `KC_PROXY_HEADERS=xforwarded` côté Keycloak.
 
-## 7. Sauvegarde
+## 8. Sauvegarde
 
 ```bash
 docker exec keycloak-db pg_dump -U keycloak -Fc keycloak > \
@@ -113,7 +133,58 @@ docker exec keycloak /opt/keycloak/bin/kc.sh export \
   --dir /opt/keycloak/data/export --users different_files
 ```
 
-## 8. Dépannage
+## 9. Passage en prod — retirer impérativement
+
+Quand le DNS public pointe vers `10.61.21.143` et Nginx sert `https://sso.example.com` :
+
+### 1. `docker-compose.yml` — retirer le bind `:8080`
+
+```yaml
+    ports:
+      # - "${LAN_IP}:8080:8080"   # ← supprimer cette ligne
+      - "${LAN_IP}:9000:9000"
+```
+
+Keycloak reste joignable par Nginx via le réseau Docker `edge` (`http://keycloak:8080`).
+
+### 2. `.env` — activer le strict hostname
+
+```env
+KC_HOSTNAME=sso.example.com
+KC_HOSTNAME_STRICT=true
+KC_HOSTNAME_STRICT_HTTPS=true
+```
+
+### 3. Redéployer la stack dans Portainer
+
+Puis vérifier :
+
+```bash
+# ne doit plus répondre depuis le LAN
+curl -s -o /dev/null -w "%{http_code}\n" --connect-timeout 2 http://10.61.21.143:8080/admin/
+# attendu : 000 (connexion refusée)
+
+# doit répondre via Nginx
+curl -k -s -o /dev/null -w "%{http_code}\n" https://sso.example.com/admin/
+# attendu : 200 ou 302
+```
+
+### 4. UFW (recommandé)
+
+```bash
+# s'assurer que 8080 n'est plus autorisé depuis le LAN en prod
+sudo ufw delete allow from 10.61.21.0/24 to any port 8080 proto tcp 2>/dev/null || true
+```
+
+Checklist prod :
+
+- [ ] Ligne `:8080:8080` supprimée du compose
+- [ ] `KC_HOSTNAME_STRICT=true`
+- [ ] `KC_HOSTNAME_STRICT_HTTPS=true`
+- [ ] Certificat Let's Encrypt actif sur Nginx pour `sso.example.com`
+- [ ] `http://10.61.21.143:8080` inaccessible depuis le LAN
+
+## 10. Dépannage
 
 | Symptôme | Piste |
 |---|---|
