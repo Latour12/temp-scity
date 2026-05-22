@@ -1,0 +1,93 @@
+name: keycloak
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: keycloak-db
+    restart: unless-stopped
+    shm_size: 512m
+    environment:
+      POSTGRES_DB: ${KC_DB_NAME:-keycloak}
+      POSTGRES_USER: ${KC_DB_USER:-keycloak}
+      POSTGRES_PASSWORD: ${KC_DB_PASSWORD:?set in .env}
+      PG_EXPORTER_USER: ${PG_EXPORTER_USER:-monitoring}
+      PG_EXPORTER_PASSWORD: ${PG_EXPORTER_PASSWORD:?set in .env}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - /home/eadminsc/keycloak/postgres/data:/var/lib/postgresql/data
+      - /home/eadminsc/keycloak/postgres/init:/docker-entrypoint-initdb.d:ro
+      - /home/eadminsc/keycloak/postgres/backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${KC_DB_USER:-keycloak} -d ${KC_DB_NAME:-keycloak}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+    logging: *default-logging
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: keycloak
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+    command: ["start", "--optimized"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://db:5432/${KC_DB_NAME:-keycloak}
+      KC_DB_USERNAME: ${KC_DB_USER:-keycloak}
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD:?set in .env}
+      KC_HOSTNAME: ${KC_HOSTNAME:?set in .env}
+      KC_HOSTNAME_STRICT: "true"
+      KC_HOSTNAME_STRICT_HTTPS: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_LOG: console
+      KC_LOG_LEVEL: INFO
+      KC_CACHE: ispn
+      KEYCLOAK_ADMIN: ${KC_BOOTSTRAP_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD:?set in .env}
+      JAVA_OPTS_APPEND: "-Xms512m -Xmx2g -XX:MaxMetaspaceSize=256m"
+    ports:
+      # 8080 (HTTP app) : interne au reseau edge -> Nginx ; pas bind sur LAN
+      - "${LAN_IP:?set in .env}:9000:9000"   # /metrics + /health pour Prometheus
+    volumes:
+      - /home/eadminsc/keycloak/import:/opt/keycloak/data/import:ro
+      - /home/eadminsc/keycloak/export:/opt/keycloak/data/export
+      - /home/eadminsc/keycloak/themes:/opt/keycloak/themes
+      - /home/eadminsc/keycloak/providers:/opt/keycloak/providers
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000; echo -e 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3; grep -q UP <&3"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    networks: [internal, edge]
+    logging: *default-logging
+
+  pg-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: keycloak-pg-exporter
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${PG_EXPORTER_USER:?}:${PG_EXPORTER_PASSWORD:?}@db:5432/${KC_DB_NAME:-keycloak}?sslmode=disable"
+    ports:
+      - "${LAN_IP}:9187:9187"
+    networks: [internal]
+    logging: *default-logging
+
+networks:
+  internal:
+    driver: bridge
+  edge:
+    external: true

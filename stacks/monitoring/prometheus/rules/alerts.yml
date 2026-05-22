@@ -1,0 +1,72 @@
+groups:
+  - name: host.rules
+    rules:
+      - alert: HostDown
+        expr: up{job="node"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Host {{ $labels.instance }} down"
+
+      - alert: HostHighCPU
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "CPU > 90% (5m) on {{ $labels.instance }}"
+
+      - alert: HostHighMem
+        expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100 > 90
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Memory > 90% on {{ $labels.instance }}"
+
+      - alert: HostDiskFull
+        expr: (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes) * 100 < 10
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: "Disk < 10% free on {{ $labels.instance }} ({{ $labels.mountpoint }})"
+
+  - name: container.rules
+    rules:
+      - alert: ContainerOOMKilled
+        expr: increase(container_oom_events_total[5m]) > 0
+        for: 0m
+        labels: { severity: critical }
+        annotations:
+          summary: "OOM kill in {{ $labels.name }}"
+
+      - alert: ContainerRestartLoop
+        expr: rate(container_start_time_seconds[10m]) > 0.05
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.name }} restart loop"
+
+  - name: service.rules
+    rules:
+      - alert: NginxDown
+        expr: up{job="nginx"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: "nginx-exporter unreachable" }
+
+      - alert: KeycloakDown
+        expr: up{job="keycloak"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: "Keycloak unreachable" }
+
+      - alert: PostgresDown
+        expr: pg_up == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations: { summary: "Postgres {{ $labels.instance }} down" }
+
+      - alert: PostgresTooManyConnections
+        expr: sum by(instance) (pg_stat_activity_count) / max by(instance) (pg_settings_max_connections) > 0.8
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "Postgres {{ $labels.instance }} > 80% connections" }

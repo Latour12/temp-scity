@@ -1,0 +1,40 @@
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: "smtp.example.com:587"
+  smtp_from: "alerts@example.com"
+  smtp_auth_username: "alerts@example.com"
+  smtp_auth_password: "REPLACE_ME"
+  smtp_require_tls: true
+
+route:
+  receiver: ops-email
+  group_by: ["alertname", "cluster", "service"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 12h
+  routes:
+    - matchers: [severity="critical"]
+      receiver: ops-critical
+      group_wait: 10s
+      repeat_interval: 1h
+
+receivers:
+  - name: ops-email
+    email_configs:
+      - to: "ops@example.com"
+        send_resolved: true
+
+  - name: ops-critical
+    email_configs:
+      - to: "ops@example.com,oncall@example.com"
+        send_resolved: true
+    # Décommenter pour Slack :
+    # slack_configs:
+    #   - api_url: "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+    #     channel: "#alerts"
+    #     send_resolved: true
+
+inhibit_rules:
+  - source_matchers: [severity="critical"]
+    target_matchers: [severity="warning"]
+    equal: ["alertname", "instance"]
